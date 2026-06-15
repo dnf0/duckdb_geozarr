@@ -16,8 +16,8 @@ debug = 0 # Disable debug info for tests as well to avoid Windows LNK1201 PDB er
 
 [profile.release]
 opt-level = "s"      # Optimize for size
-strip = true         # Strip symbols from binary
-lto = true           # Link time optimization
+# strip = true         # Strip symbols from binary
+# lto = true           # Link time optimization
 codegen-units = 1    # Maximize size reduction
 
 [profile.bench]

@@ -88,10 +88,7 @@ pub fn populate_coordinate_batch_f64(
         // `step_in_stride` can only be exactly `stride` or less due to `count_to_fill` calculation.
         let increment_mod = (step_in_stride == stride) as u64;
         step_in_stride -= increment_mod * stride;
-        current_mod += increment_mod;
-        if current_mod == shape {
-            current_mod = 0;
-        }
+        current_mod = (current_mod + increment_mod) % shape;
     }
 }
 
@@ -132,10 +129,7 @@ pub fn populate_coordinate_batch_i64(
         // Reset `step_in_stride` and advance `current_mod`.
         if step_in_stride == stride {
             step_in_stride = 0;
-            current_mod += 1;
-            if current_mod == shape {
-                current_mod = 0;
-            }
+            current_mod = (current_mod + 1) % shape;
         }
     }
 }
