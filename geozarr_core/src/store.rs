@@ -210,18 +210,9 @@ fn build_local_cog_child(
     let header_len = std::fs::metadata(&canonical_path)
         .map(|m| m.len().min(COG_HEADER_WINDOW))
         .unwrap_or(COG_HEADER_WINDOW);
-    let header_bytes = std::thread::spawn({
-        let operator = operator.clone();
-        let fname = fname.clone();
-        move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async { operator.read_with(&fname).range(0..header_len).await })
-                .map(|b| b.to_vec())
-                .map_err(|e| e.to_string())
-        }
-    })
-    .join()
-    .unwrap()?;
+    let header_bytes = crate::store::safe_block_on(async { operator.read_with(&fname).range(0..header_len).await })
+        .map(|b| b.to_vec())
+        .map_err(|e| e.to_string())?;
     let meta = crate::cog::parse_cog_metadata(&header_bytes)?;
     crate::virtual_store::VirtualCogStore::new(operator, fname, meta)
 }
@@ -384,13 +375,8 @@ pub fn resolve_sync_store(
         let store: Arc<dyn ReadableStorageTraits> = if is_cog {
             let async_op_clone = async_operator.clone();
             let root_str = root.to_string();
-            let header_res = std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async { async_op_clone.read_with(&root_str).range(0..16384).await })
-                    .map_err(|e| e.to_string())
-            })
-            .join()
-            .unwrap();
+            let header_res = safe_block_on(async { async_op_clone.read_with(&root_str).range(0..16384).await })
+                .map_err(|e| e.to_string());
 
             let header_bytes = header_res?.to_vec();
             let meta = crate::cog::parse_cog_metadata(&header_bytes).unwrap_or_default();
@@ -542,73 +528,60 @@ pub fn resolve_sync_store(
                     }
 
                     // Concurrent header-fetch, mirroring the single-Item arm.
-                    let built = std::thread::spawn(move || {
-                            let rt = tokio::runtime::Runtime::new().unwrap();
-                            rt.block_on(async {
-                                let mut set = tokio::task::JoinSet::new();
-                                for (name, idx, href) in jobs {
-                                    set.spawn(async move {
-                                        let (operator, root_str) = if href.starts_with("s3://") {
-                                            let bucket_and_path =
-                                                href.strip_prefix("s3://").unwrap();
-                                            let bucket = bucket_and_path
-                                                .split('/')
-                                                .next()
-                                                .unwrap_or(bucket_and_path);
-                                            let root =
-                                                bucket_and_path.strip_prefix(bucket).unwrap_or("/");
-                                            let builder = opendal::services::S3::default()
-                                                .bucket(bucket)
-                                                .root(root);
-                                            let root_str = bucket_and_path
-                                                .strip_prefix(bucket)
-                                                .unwrap_or("/")
-                                                .to_string();
-                                            (opendal::Operator::new(builder).unwrap().finish(), root_str)
-                                        } else {
-                                            let (endpoint, path) = split_http_endpoint_key(&href).unwrap();
-                                            let builder =
-                                                opendal::services::Http::default().endpoint(&endpoint);
-                                            (opendal::Operator::new(builder).unwrap().finish(), path)
-                                        };
-                                        let header_bytes = operator
-                                            .read_with(&root_str)
-                                            .range(0..16384)
-                                            .await
-                                            .map_err(|e| {
-                                                format!(
-                                                    "failed to fetch COG header for item {idx} asset {name}: {e}"
-                                                )
-                                            })?
-                                            .to_vec();
-                                        let meta = crate::cog::parse_cog_metadata(&header_bytes)
-                                            .map_err(|e| {
-                                                format!(
-                                                    "failed to parse COG header for item {idx} asset {name}: {e}"
-                                                )
-                                            })?;
-                                        let store = crate::virtual_store::VirtualCogStore::new(
-                                            operator, root_str, meta,
-                                        );
-                                        Ok::<_, String>((name, idx, store))
-                                    });
-                                }
-                                let mut results: Vec<(
-                                    String,
-                                    usize,
-                                    crate::virtual_store::VirtualCogStore,
-                                )> = Vec::new();
-                                while let Some(res) = set.join_next().await {
-                                    if let Ok(item) = res {
-                                        let (name, idx, store) = item?;
-                                        results.push((name, idx, store?));
-                                    }
-                                }
-                                Ok::<_, String>(results)
-                            })
-                        })
-                        .join()
-                        .unwrap()?;
+                    let built = safe_block_on(async {
+                        let mut set = tokio::task::JoinSet::new();
+                        for (name, idx, href) in jobs {
+                            set.spawn(async move {
+                                let (operator, root_str) = if href.starts_with("s3://") {
+                                    let bucket_and_path = href.strip_prefix("s3://").unwrap();
+                                    let bucket = bucket_and_path
+                                        .split('/')
+                                        .next()
+                                        .unwrap_or(bucket_and_path);
+                                    let root = bucket_and_path.strip_prefix(bucket).unwrap_or("/");
+                                    let builder =
+                                        opendal::services::S3::default().bucket(bucket).root(root);
+                                    let root_str = bucket_and_path
+                                        .strip_prefix(bucket)
+                                        .unwrap_or("/")
+                                        .to_string();
+                                    (opendal::Operator::new(builder).unwrap().finish(), root_str)
+                                } else {
+                                    let (endpoint, path) = split_http_endpoint_key(&href).unwrap();
+                                    let builder =
+                                        opendal::services::Http::default().endpoint(&endpoint);
+                                    (opendal::Operator::new(builder).unwrap().finish(), path)
+                                };
+                                let header_bytes = operator
+                                    .read_with(&root_str)
+                                    .range(0..16384)
+                                    .await
+                                    .map_err(|e| {
+                                        format!(
+                                            "failed to fetch COG header for item {idx} asset {name}: {e}"
+                                        )
+                                    })?
+                                    .to_vec();
+                                let meta = crate::cog::parse_cog_metadata(&header_bytes).map_err(|e| {
+                                    format!(
+                                        "failed to parse COG header for item {idx} asset {name}: {e}"
+                                    )
+                                })?;
+                                let store =
+                                    crate::virtual_store::VirtualCogStore::new(operator, root_str, meta);
+                                Ok::<_, String>((name, idx, store))
+                            });
+                        }
+                        let mut results: Vec<(String, usize, crate::virtual_store::VirtualCogStore)> =
+                            Vec::new();
+                        while let Some(res) = set.join_next().await {
+                            if let Ok(item) = res {
+                                let (name, idx, store) = item?;
+                                results.push((name, idx, store?));
+                            }
+                        }
+                        Ok::<_, String>(results)
+                    })?;
 
                     // Re-assemble time-ordered children per asset.
                     let n = sorted.len();
@@ -680,80 +653,68 @@ pub fn resolve_sync_store(
 
                         if !cog_assets.is_empty() {
                             // Fetch headers concurrently
-                            let children = std::thread::spawn(move || {
-                                let rt = tokio::runtime::Runtime::new().unwrap();
-                                rt.block_on(async {
-                                    let mut set = tokio::task::JoinSet::new();
-                                    for (name, href) in cog_assets {
-                                        set.spawn(async move {
-                                            let (operator, root_str) = if href.starts_with("s3://")
-                                            {
-                                                let bucket_and_path =
-                                                    href.strip_prefix("s3://").unwrap();
-                                                let bucket = bucket_and_path
-                                                    .split('/')
-                                                    .next()
-                                                    .unwrap_or(bucket_and_path);
-                                                let root = bucket_and_path
-                                                    .strip_prefix(bucket)
-                                                    .unwrap_or("/");
-                                                let builder = opendal::services::S3::default()
-                                                    .bucket(bucket)
-                                                    .root(root);
-                                                let root_str = bucket_and_path
-                                                    .strip_prefix(bucket)
-                                                    .unwrap_or("/")
-                                                    .to_string();
-                                                (
-                                                    opendal::Operator::new(builder)
-                                                        .unwrap()
-                                                        .finish(),
-                                                    root_str,
-                                                )
-                                            } else {
-                                                let (endpoint, path) =
-                                                    split_http_endpoint_key(&href).unwrap();
-                                                let builder = opendal::services::Http::default()
-                                                    .endpoint(&endpoint);
-                                                (
-                                                    opendal::Operator::new(builder)
-                                                        .unwrap()
-                                                        .finish(),
-                                                    path,
-                                                )
-                                            };
-
-                                            let header_bytes = operator
-                                                .read_with(&root_str)
-                                                .range(0..16384)
-                                                .await
-                                                .unwrap_or_default()
-                                                .to_vec();
-                                            let meta =
-                                                crate::cog::parse_cog_metadata(&header_bytes)
-                                                    .unwrap_or_default();
+                            let children = safe_block_on(async {
+                                let mut set = tokio::task::JoinSet::new();
+                                for (name, href) in cog_assets {
+                                    set.spawn(async move {
+                                        let (operator, root_str) = if href.starts_with("s3://") {
+                                            let bucket_and_path =
+                                                href.strip_prefix("s3://").unwrap();
+                                            let bucket = bucket_and_path
+                                                .split('/')
+                                                .next()
+                                                .unwrap_or(bucket_and_path);
+                                            let root =
+                                                bucket_and_path.strip_prefix(bucket).unwrap_or("/");
+                                            let builder = opendal::services::S3::default()
+                                                .bucket(bucket)
+                                                .root(root);
+                                            let root_str = bucket_and_path
+                                                .strip_prefix(bucket)
+                                                .unwrap_or("/")
+                                                .to_string();
                                             (
-                                                name,
-                                                crate::virtual_store::VirtualCogStore::new(
-                                                    operator, root_str, meta,
-                                                ),
+                                                opendal::Operator::new(builder).unwrap().finish(),
+                                                root_str,
                                             )
-                                        });
-                                    }
+                                        } else {
+                                            let (endpoint, path) =
+                                                split_http_endpoint_key(&href).unwrap();
+                                            let builder = opendal::services::Http::default()
+                                                .endpoint(&endpoint);
+                                            (
+                                                opendal::Operator::new(builder).unwrap().finish(),
+                                                path,
+                                            )
+                                        };
 
-                                    let mut children_map = std::collections::HashMap::new();
-                                    while let Some(res) = set.join_next().await {
-                                        if let Ok((name, store)) = res {
-                                            // A multi-band / unsupported child COG fails the
-                                            // whole STAC open; STAC is not first-class yet.
-                                            children_map.insert(name, store?);
-                                        }
+                                        let header_bytes = operator
+                                            .read_with(&root_str)
+                                            .range(0..16384)
+                                            .await
+                                            .unwrap_or_default()
+                                            .to_vec();
+                                        let meta = crate::cog::parse_cog_metadata(&header_bytes)
+                                            .unwrap_or_default();
+                                        (
+                                            name,
+                                            crate::virtual_store::VirtualCogStore::new(
+                                                operator, root_str, meta,
+                                            ),
+                                        )
+                                    });
+                                }
+
+                                let mut children_map = std::collections::HashMap::new();
+                                while let Some(res) = set.join_next().await {
+                                    if let Ok((name, store)) = res {
+                                        // A multi-band / unsupported child COG fails the
+                                        // whole STAC open; STAC is not first-class yet.
+                                        children_map.insert(name, store?);
                                     }
-                                    Ok::<_, String>(children_map)
-                                })
-                            })
-                            .join()
-                            .unwrap()?;
+                                }
+                                Ok::<_, String>(children_map)
+                            })?;
 
                             let mut asset_names: Vec<String> = children.keys().cloned().collect();
                             asset_names.sort();
@@ -817,15 +778,10 @@ pub fn resolve_sync_store(
 
                                     let op_clone = operator.clone();
                                     let path_clone = root_str.clone();
-                                    let header_res = std::thread::spawn(move || {
-                                        let rt = tokio::runtime::Runtime::new().unwrap();
-                                        rt.block_on(async {
-                                            op_clone.read_with(&path_clone).range(0..16384).await
-                                        })
-                                        .map_err(|e| e.to_string())
+                                    let header_res = safe_block_on(async {
+                                        op_clone.read_with(&path_clone).range(0..16384).await
                                     })
-                                    .join()
-                                    .unwrap();
+                                    .map_err(|e| e.to_string());
 
                                     if let Ok(header_bytes) = header_res {
                                         let meta =
@@ -857,18 +813,13 @@ pub fn resolve_sync_store(
         let store: Arc<dyn ReadableStorageTraits> = if is_cog {
             let async_op_clone = async_operator.clone();
             let root_str_clone = root_str.clone();
-            let header_res = std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
+            let header_res = safe_block_on(async {
                     async_op_clone
                         .read_with(&root_str_clone)
                         .range(0..16384)
                         .await
                 })
-                .map_err(|e| e.to_string())
-            })
-            .join()
-            .unwrap();
+                .map_err(|e| e.to_string());
 
             let header_bytes = header_res?.to_vec();
             let meta = crate::cog::parse_cog_metadata(&header_bytes).unwrap_or_default();
@@ -1015,18 +966,13 @@ pub fn resolve_sync_store(
             let header_len = std::fs::metadata(&canonical_path)
                 .map(|m| m.len().min(COG_HEADER_WINDOW))
                 .unwrap_or(COG_HEADER_WINDOW);
-            let header_res = std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
+            let header_res = safe_block_on(async {
                     async_op_clone
                         .read_with(&fname_clone)
                         .range(0..header_len)
                         .await
                 })
-                .map_err(|e| e.to_string())
-            })
-            .join()
-            .unwrap();
+                .map_err(|e| e.to_string());
 
             let header_bytes = header_res?.to_vec();
             let meta = crate::cog::parse_cog_metadata(&header_bytes).unwrap_or_default();
