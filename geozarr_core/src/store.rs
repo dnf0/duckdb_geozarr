@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use zarrs::storage::ReadableStorageTraits;
@@ -7,6 +8,16 @@ pub fn global_runtime() -> &'static tokio::runtime::Runtime {
     RUNTIME.get_or_init(|| {
         tokio::runtime::Runtime::new().expect("Failed to create global Tokio runtime")
     })
+}
+
+pub fn safe_block_on<F: Future>(f: F) -> F::Output {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        // We are inside an existing Tokio runtime, so we must yield using block_in_place
+        tokio::task::block_in_place(|| handle.block_on(f))
+    } else {
+        // We are not in a Tokio context, we can safely use our global runtime
+        global_runtime().block_on(f)
+    }
 }
 
 pub struct ResolvedStore {
@@ -37,20 +48,13 @@ impl ReadableStorageTraits for AsyncToSyncOpendalStore {
         let op = self.operator.clone();
         let key_str = key.as_str().to_string();
 
-        let res = std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                match op.read(&key_str).await {
-                    Ok(bytes) => Ok(Some(bytes::Bytes::from(bytes.to_vec()))),
-                    Err(e) if e.kind() == opendal::ErrorKind::NotFound => Ok(None),
-                    Err(e) => Err(zarrs::storage::StorageError::Other(e.to_string())),
-                }
-            })
+        safe_block_on(async {
+            match op.read(&key_str).await {
+                Ok(bytes) => Ok(Some(bytes::Bytes::from(bytes.to_vec()))),
+                Err(e) if e.kind() == opendal::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(zarrs::storage::StorageError::Other(e.to_string())),
+            }
         })
-        .join()
-        .unwrap();
-
-        res
     }
 
     fn get_partial_values_key(
@@ -72,42 +76,46 @@ impl ReadableStorageTraits for AsyncToSyncOpendalStore {
             .iter()
             .any(|r| matches!(r, ByteRange::FromEnd(_, _) | ByteRange::FromStart(_, None)));
 
-        let res = std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                // Resolve the object size once (iff any range needs it). A
-                // missing object maps to `Ok(None)`, matching `get`/`size_key`.
-                let size = if needs_size {
-                    match op.stat(&key_str).await {
-                        Ok(meta) => meta.content_length(),
-                        Err(e) if e.kind() == opendal::ErrorKind::NotFound => return Ok(None),
-                        Err(e) => return Err(zarrs::storage::StorageError::Other(e.to_string())),
-                    }
-                } else {
-                    // Unused by `FromStart(_, Some(_))` resolvers; any value is fine.
-                    0
-                };
-
-                let mut out = Vec::with_capacity(ranges.len());
-                for r in ranges {
-                    // Use the zarrs `ByteRange` resolvers for the [start, end)
-                    // half-open range, matching the crate's exact semantics
-                    // (notably `FromEnd` offsets measured back from `size`).
-                    let start = r.start(size);
-                    let end = r.end(size);
-                    match op.read_with(&key_str).range(start..end).await {
-                        Ok(buf) => out.push(bytes::Bytes::from(buf.to_vec())),
-                        Err(e) if e.kind() == opendal::ErrorKind::NotFound => return Ok(None),
-                        Err(e) => return Err(zarrs::storage::StorageError::Other(e.to_string())),
-                    }
+        safe_block_on(async {
+            // Resolve the object size once (iff any range needs it). A
+            // missing object maps to `Ok(None)`, matching `get`/`size_key`.
+            let size = if needs_size {
+                match op.stat(&key_str).await {
+                    Ok(meta) => meta.content_length(),
+                    Err(e) if e.kind() == opendal::ErrorKind::NotFound => return Ok(None),
+                    Err(e) => return Err(zarrs::storage::StorageError::Other(e.to_string())),
                 }
-                Ok(Some(out))
-            })
-        })
-        .join()
-        .unwrap();
+            } else {
+                // Unused by `FromStart(_, Some(_))` resolvers; any value is fine.
+                0
+            };
 
-        res
+            let mut set = tokio::task::JoinSet::new();
+            for (idx, r) in ranges.into_iter().enumerate() {
+                let start = r.start(size);
+                let end = r.end(size);
+                let op_clone = op.clone();
+                let key_str_clone = key_str.clone();
+                set.spawn(async move {
+                    match op_clone.read_with(&key_str_clone).range(start..end).await {
+                        Ok(buf) => Ok((idx, bytes::Bytes::from(buf.to_vec()))),
+                        Err(e) if e.kind() == opendal::ErrorKind::NotFound => Err(None),
+                        Err(e) => Err(Some(zarrs::storage::StorageError::Other(e.to_string()))),
+                    }
+                });
+            }
+
+            let mut out = vec![bytes::Bytes::new(); set.len()];
+            while let Some(res) = set.join_next().await {
+                match res {
+                    Ok(Ok((idx, buf))) => out[idx] = buf,
+                    Ok(Err(None)) => return Ok(None),
+                    Ok(Err(Some(e))) => return Err(e),
+                    Err(e) => return Err(zarrs::storage::StorageError::Other(format!("Join error: {}", e))),
+                }
+            }
+            Ok(Some(out))
+        })
     }
 
     fn size_key(
@@ -117,20 +125,13 @@ impl ReadableStorageTraits for AsyncToSyncOpendalStore {
         let op = self.operator.clone();
         let key_str = key.as_str().to_string();
 
-        let res = std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                match op.stat(&key_str).await {
-                    Ok(meta) => Ok(Some(meta.content_length())),
-                    Err(e) if e.kind() == opendal::ErrorKind::NotFound => Ok(None),
-                    Err(e) => Err(zarrs::storage::StorageError::Other(e.to_string())),
-                }
-            })
+        safe_block_on(async {
+            match op.stat(&key_str).await {
+                Ok(meta) => Ok(Some(meta.content_length())),
+                Err(e) if e.kind() == opendal::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(zarrs::storage::StorageError::Other(e.to_string())),
+            }
         })
-        .join()
-        .unwrap();
-
-        res
     }
 }
 
