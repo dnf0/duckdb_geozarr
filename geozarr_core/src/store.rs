@@ -1,5 +1,13 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
 use zarrs::storage::ReadableStorageTraits;
+
+pub fn global_runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Runtime::new().expect("Failed to create global Tokio runtime")
+    })
+}
 
 pub struct ResolvedStore {
     pub store: Arc<dyn ReadableStorageTraits>,
@@ -1248,4 +1256,5 @@ mod tests {
         assert_eq!(partial[0].as_ref(), &[2]);
         assert_eq!(partial[1].as_ref(), &[1, 2]);
     }
+
 }
