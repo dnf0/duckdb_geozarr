@@ -84,11 +84,12 @@ pub fn populate_coordinate_batch_f64(
         i += count_to_fill;
         step_in_stride += count_to_fill as u64;
 
-        // Use branchless arithmetic to update step_in_stride and current_mod.
-        // `step_in_stride` can only be exactly `stride` or less due to `count_to_fill` calculation.
         let increment_mod = (step_in_stride == stride) as u64;
         step_in_stride -= increment_mod * stride;
-        current_mod = (current_mod + increment_mod) % shape;
+        current_mod += increment_mod;
+        if current_mod == shape {
+            current_mod = 0;
+        }
     }
 }
 
@@ -129,7 +130,10 @@ pub fn populate_coordinate_batch_i64(
         // Reset `step_in_stride` and advance `current_mod`.
         if step_in_stride == stride {
             step_in_stride = 0;
-            current_mod = (current_mod + 1) % shape;
+            current_mod += 1;
+            if current_mod == shape {
+                current_mod = 0;
+            }
         }
     }
 }
