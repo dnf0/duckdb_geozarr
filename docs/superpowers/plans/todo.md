@@ -1,3 +1,4 @@
-- [x] Task 1: Update Core API Signatures to accept QueryConstraints
-- [x] Task 2: Pushdown BBox in STAC HTTP Arm
-- [x] Task 3: Pre-parse Constraints and Validate BBox in DuckDB Bind
+- [x] **Task 1: Add Dependencies**
+- [x] **Task 2: Create Configuration Module**
+- [x] **Task 3: Integrate Config with CLI Fallbacks**
+- [x] **Task 4: Inject S3 Credentials into DuckDB**
