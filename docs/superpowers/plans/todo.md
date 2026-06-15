@@ -1,4 +1,4 @@
 - [x] **Task 1: Add Dependencies**
 - [x] **Task 2: Create Configuration Module**
 - [x] **Task 3: Integrate Config with CLI Fallbacks**
-- [ ] **Task 4: Inject S3 Credentials into DuckDB**
+- [x] **Task 4: Inject S3 Credentials into DuckDB**
