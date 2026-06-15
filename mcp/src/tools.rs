@@ -129,8 +129,6 @@ pub fn describe_table(conn: &Connection, name: &str) -> EyreResult<Value> {
 /// there is no native mechanism to apply here. v1 ships the row cap + guard;
 /// wall-clock cancellation belongs in the rmcp adapter layer, which can run
 /// each call on a worker paired with a `Connection::interrupt()` handle.
-// TODO(timeout): no native DuckDB statement timeout in =1.10502.0; enforce a
-// wall-clock budget via interrupt() in the rmcp adapter (Task 5).
 pub fn run_sql(conn: &Connection, sql: &str, limit: Option<usize>) -> EyreResult<Value> {
     crate::guard::ensure_read_only(sql)?;
     let trimmed = sql.trim().trim_end_matches(';');
