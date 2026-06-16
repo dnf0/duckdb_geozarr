@@ -499,8 +499,7 @@ impl crate::geo_dataset::ChunkStream for ZarrChunkStream {
     fn read_chunk(
         &self,
         chunk_idx: u64,
-        buffer: &mut crate::types::ChunkBuffer
-    ) -> Result<Option<crate::scanner::SubsetInfo>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<(crate::types::ChunkBuffer, crate::scanner::SubsetInfo)>, Box<dyn std::error::Error>> {
         if chunk_idx >= self.num_chunks {
             return Ok(None);
         }
@@ -517,8 +516,7 @@ impl crate::geo_dataset::ChunkStream for ZarrChunkStream {
             ($ty:ty, $variant:path $(,)*) => {{
                 let (elements, subset_info) = reader
                     .read_chunk_subset::<$ty>(&grid_pos, &self.bounds_min, &self.bounds_max)?;
-                *buffer = $variant(elements);
-                Ok(Some(subset_info))
+                Ok(Some(($variant(elements), subset_info)))
             }};
         }
 
@@ -529,6 +527,23 @@ impl crate::geo_dataset::ChunkStream for ZarrChunkStream {
 impl crate::geo_dataset::GeoDataset for Arc<ZarrDataset> {
     fn schema(&self) -> Result<Vec<(String, DataType)>, Box<dyn std::error::Error>> {
         self.as_ref().schema().map_err(|e| e.into())
+    }
+
+    fn metadata(&self) -> crate::geo_dataset::DatasetMetadata {
+        crate::geo_dataset::DatasetMetadata {
+            shape: self.shape.clone(),
+            chunk_shape: self.chunk_shape.clone(),
+            data_type: self.data_type.clone(),
+            dim_names: self.dim_names.clone(),
+            coords: self.coords.clone(),
+            lon_0_360_dims: self.lon_0_360_dims.clone(),
+            fill_value_bytes: self.fill_value_bytes.clone(),
+            spatial_transform: self.spatial_transform.clone(),
+        }
+    }
+
+    fn compute_bounds(&self, constraints: &crate::query_planner::QueryConstraints) -> (Vec<u64>, Vec<u64>) {
+        self.as_ref().compute_bounds(constraints)
     }
 
     fn scan(
