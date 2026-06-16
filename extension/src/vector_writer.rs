@@ -261,6 +261,11 @@ where
         valid_rows += batch_size;
         local_state.element_cursor += batch_size;
         if local_state.element_cursor >= total {
+            // Note: zarrs retrieve_chunk_subset_elements allocates a Vec internally.
+            // For now, we will simply set state.buffer_pool = Some(vec![]) at the end
+            // of this buffer, even though zarrs doesn't let us reuse the allocation directly yet.
+            // But setting up the state tracking is the goal for this task.
+            local_state.buffer_pool = Some(vec![]);
             local_state.current_chunk_buffer = None;
         }
 
