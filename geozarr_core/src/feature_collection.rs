@@ -47,22 +47,20 @@ pub fn build_stac_url(
         .copied()
         .unwrap_or((None, None));
 
+    let separator = if url.contains('?') { "&" } else { "?" };
     match (time_bounds.0, time_bounds.1) {
         (None, None) => {}
         (Some(start), None) => {
-            let start_str = crate::datetime::epoch_seconds_to_rfc3339(start)?;
-            let separator = if url.contains('?') { "&" } else { "?" };
+            let start_str = crate::datetime::epoch_seconds_to_rfc3339(start)?.replace('+', "%2B");
             url = format!("{}{separator}datetime={start_str}/..", url);
         }
         (None, Some(end)) => {
-            let end_str = crate::datetime::epoch_seconds_to_rfc3339(end)?;
-            let separator = if url.contains('?') { "&" } else { "?" };
+            let end_str = crate::datetime::epoch_seconds_to_rfc3339(end)?.replace('+', "%2B");
             url = format!("{}{separator}datetime=../{end_str}", url);
         }
         (Some(start), Some(end)) => {
-            let start_str = crate::datetime::epoch_seconds_to_rfc3339(start)?;
-            let end_str = crate::datetime::epoch_seconds_to_rfc3339(end)?;
-            let separator = if url.contains('?') { "&" } else { "?" };
+            let start_str = crate::datetime::epoch_seconds_to_rfc3339(start)?.replace('+', "%2B");
+            let end_str = crate::datetime::epoch_seconds_to_rfc3339(end)?.replace('+', "%2B");
             url = format!("{}{separator}datetime={start_str}/{end_str}", url);
         }
     }
@@ -98,15 +96,16 @@ mod tests {
     #[test]
     fn test_stac_time_pushdown_closed() {
         let mut bounds = std::collections::HashMap::new();
-        bounds.insert("time".to_string(), (Some(1767225600.0), Some(1798761600.0))); // Jan 1 2026 to Dec 31 2026
+        bounds.insert("time".to_string(), (Some(1767225600.0), Some(1798761600.0))); // Jan 1 2026 to Jan 1 2027
         let constraints = crate::query_planner::QueryConstraints {
             bounds,
             pins: std::collections::HashMap::new(),
         };
 
         let url =
-            crate::feature_collection::build_stac_url("https://example.com/search", &constraints).unwrap();
-        assert!(url.contains("datetime=2026-01-01T00:00:00+00:00/2027-01-01T00:00:00+00:00"));
+            crate::feature_collection::build_stac_url("https://example.com/search", &constraints)
+                .unwrap();
+        assert!(url.contains("datetime=2026-01-01T00:00:00%2B00:00/2027-01-01T00:00:00%2B00:00"));
     }
 
     #[test]
@@ -119,8 +118,9 @@ mod tests {
         };
 
         let url =
-            crate::feature_collection::build_stac_url("https://example.com/search", &constraints).unwrap();
-        assert!(url.contains("datetime=2026-01-01T00:00:00+00:00/.."));
+            crate::feature_collection::build_stac_url("https://example.com/search", &constraints)
+                .unwrap();
+        assert!(url.contains("datetime=2026-01-01T00:00:00%2B00:00/.."));
     }
 
     #[test]
@@ -133,7 +133,8 @@ mod tests {
         };
 
         let url =
-            crate::feature_collection::build_stac_url("https://example.com/search", &constraints).unwrap();
-        assert!(url.contains("datetime=../2026-01-01T00:00:00+00:00"));
+            crate::feature_collection::build_stac_url("https://example.com/search", &constraints)
+                .unwrap();
+        assert!(url.contains("datetime=../2026-01-01T00:00:00%2B00:00"));
     }
 }
