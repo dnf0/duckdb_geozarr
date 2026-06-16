@@ -406,7 +406,7 @@ pub fn resolve_sync_store(
         if !is_cog && !path.ends_with(".zarr") && !path.ends_with(".zarr/") {
             // Check if it's a STAC Item
             let mut fetch_url = if let Some(c) = constraints {
-                crate::feature_collection::build_stac_url(path, c)
+                crate::feature_collection::build_stac_url(path, c).map_err(|e| Box::<dyn std::error::Error>::from(e))?
             } else {
                 path.to_string()
             };

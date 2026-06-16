@@ -17,7 +17,7 @@ impl FeatureCollectionDataset {
 pub fn build_stac_url(
     base_url: &str,
     constraints: &crate::query_planner::QueryConstraints,
-) -> String {
+) -> Result<String, String> {
     let mut url = base_url.to_string();
 
     let lat_bounds = constraints
@@ -41,7 +41,33 @@ pub fn build_stac_url(
         );
     }
 
-    url
+    let time_bounds = constraints
+        .bounds
+        .get("time")
+        .copied()
+        .unwrap_or((None, None));
+
+    match (time_bounds.0, time_bounds.1) {
+        (None, None) => {}
+        (Some(start), None) => {
+            let start_str = crate::datetime::epoch_seconds_to_rfc3339(start)?;
+            let separator = if url.contains('?') { "&" } else { "?" };
+            url = format!("{}{separator}datetime={start_str}/..", url);
+        }
+        (None, Some(end)) => {
+            let end_str = crate::datetime::epoch_seconds_to_rfc3339(end)?;
+            let separator = if url.contains('?') { "&" } else { "?" };
+            url = format!("{}{separator}datetime=../{end_str}", url);
+        }
+        (Some(start), Some(end)) => {
+            let start_str = crate::datetime::epoch_seconds_to_rfc3339(start)?;
+            let end_str = crate::datetime::epoch_seconds_to_rfc3339(end)?;
+            let separator = if url.contains('?') { "&" } else { "?" };
+            url = format!("{}{separator}datetime={start_str}/{end_str}", url);
+        }
+    }
+
+    Ok(url)
 }
 
 #[cfg(test)]
@@ -65,7 +91,49 @@ mod tests {
         };
 
         let url =
-            crate::feature_collection::build_stac_url("https://example.com/search", &constraints);
+            crate::feature_collection::build_stac_url("https://example.com/search", &constraints).unwrap();
         assert!(url.contains("bbox=-10,40,10,45"));
+    }
+
+    #[test]
+    fn test_stac_time_pushdown_closed() {
+        let mut bounds = std::collections::HashMap::new();
+        bounds.insert("time".to_string(), (Some(1767225600.0), Some(1798761600.0))); // Jan 1 2026 to Dec 31 2026
+        let constraints = crate::query_planner::QueryConstraints {
+            bounds,
+            pins: std::collections::HashMap::new(),
+        };
+
+        let url =
+            crate::feature_collection::build_stac_url("https://example.com/search", &constraints).unwrap();
+        assert!(url.contains("datetime=2026-01-01T00:00:00+00:00/2027-01-01T00:00:00+00:00"));
+    }
+
+    #[test]
+    fn test_stac_time_pushdown_open_end() {
+        let mut bounds = std::collections::HashMap::new();
+        bounds.insert("time".to_string(), (Some(1767225600.0), None));
+        let constraints = crate::query_planner::QueryConstraints {
+            bounds,
+            pins: std::collections::HashMap::new(),
+        };
+
+        let url =
+            crate::feature_collection::build_stac_url("https://example.com/search", &constraints).unwrap();
+        assert!(url.contains("datetime=2026-01-01T00:00:00+00:00/.."));
+    }
+
+    #[test]
+    fn test_stac_time_pushdown_open_start() {
+        let mut bounds = std::collections::HashMap::new();
+        bounds.insert("time".to_string(), (None, Some(1767225600.0)));
+        let constraints = crate::query_planner::QueryConstraints {
+            bounds,
+            pins: std::collections::HashMap::new(),
+        };
+
+        let url =
+            crate::feature_collection::build_stac_url("https://example.com/search", &constraints).unwrap();
+        assert!(url.contains("datetime=../2026-01-01T00:00:00+00:00"));
     }
 }
