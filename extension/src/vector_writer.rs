@@ -160,23 +160,22 @@ where
 
     loop {
         if local_state.current_chunk_buffer.is_none() {
-            let assigned_grid = loop {
-                if let Some(idx) = local_state.grid_batch.pop() {
-                    break Some(idx);
-                }
-
+            let assigned_grid = if let Some(idx) = local_state.grid_batch.pop() {
+                Some(idx)
+            } else {
                 let mut g_state = global_state
                     .lock()
                     .map_err(|e| format!("Mutex poisoned: {}", e))?;
 
                 let mut next_batch = g_state.grid_iterator.next_batch(16);
                 if next_batch.is_empty() {
-                    break None;
+                    None
+                } else {
+                    next_batch.reverse();
+                    let idx = next_batch.pop().unwrap();
+                    local_state.grid_batch = next_batch;
+                    Some(idx)
                 }
-                next_batch.reverse();
-                let idx = next_batch.pop().unwrap();
-                local_state.grid_batch = next_batch;
-                break Some(idx);
             };
 
             let assigned_grid = match assigned_grid {
