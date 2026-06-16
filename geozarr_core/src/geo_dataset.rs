@@ -1,24 +1,22 @@
 use crate::query_planner::QueryConstraints;
-use std::any::Any;
+use crate::types::ChunkBuffer;
 use zarrs::array::DataType;
-
-pub trait ScanPlan: Send + Sync {
-    fn as_any(&self) -> &dyn Any;
-}
 
 pub trait GeoDataset: Send + Sync {
     fn schema(&self) -> Result<Vec<(String, DataType)>, Box<dyn std::error::Error>>;
-    fn plan_scan(
+
+    fn scan(
         &self,
-        constraints: &QueryConstraints,
-    ) -> Result<Box<dyn ScanPlan>, Box<dyn std::error::Error>>;
-    fn num_chunks(&self, plan: &dyn ScanPlan) -> u64;
-    // We will pass the exact thread index to let the dataset yield its rows
-    // For now, minimal method definition. The actual macro integration might require specific return types.
+        constraints: &QueryConstraints
+    ) -> Result<Box<dyn ChunkStream>, Box<dyn std::error::Error>>;
+}
+
+pub trait ChunkStream: Send + Sync {
+    fn estimated_chunks(&self) -> Option<u64>;
+
     fn read_chunk(
         &self,
-        plan: &dyn ScanPlan,
         chunk_idx: u64,
-        output_buffer: &mut crate::types::ChunkBuffer,
-    ) -> Result<(), Box<dyn std::error::Error>>;
+        buffer: &mut ChunkBuffer
+    ) -> Result<bool, Box<dyn std::error::Error>>;
 }
