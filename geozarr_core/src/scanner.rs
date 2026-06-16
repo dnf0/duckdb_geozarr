@@ -62,6 +62,17 @@ impl GridIterator {
         }
     }
 
+    pub fn get_chunk_pos(&self, mut chunk_idx: u64) -> Vec<u64> {
+        let rank = self.bounds_min.len();
+        let mut pos = vec![0; rank];
+        for i in (0..rank).rev() {
+            let dim_len = self.bounds_max[i] - self.bounds_min[i] + 1;
+            pos[i] = self.bounds_min[i] + (chunk_idx % dim_len);
+            chunk_idx /= dim_len;
+        }
+        pos
+    }
+
     pub fn next_batch(&mut self, batch_size: usize) -> Vec<Vec<u64>> {
         self.by_ref().take(batch_size).collect()
     }

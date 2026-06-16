@@ -1,9 +1,8 @@
 #![allow(clippy::type_complexity)]
 
-use crate::table_function::{GlobalState, LocalState, ReadGeoBindData};
+use crate::table_function::{LocalState, ReadGeoBindData};
 use duckdb::core::DataChunkHandle;
 use geozarr_core::types::ChunkBuffer;
-use std::sync::Mutex;
 use zarrs::array::ElementOwned;
 
 pub trait FillValueCmp {
@@ -142,11 +141,10 @@ pub fn populate_coordinate_batch_i64(
 
 pub fn write_chunk_unified<T, Extract, Insert>(
     extract: Extract,
-    wrap: fn(Vec<T>) -> ChunkBuffer,
     mut insert_value: Insert,
     output: &mut DataChunkHandle,
     local_state: &mut LocalState,
-    global_state: &Mutex<GlobalState>,
+    next_chunk: &std::sync::atomic::AtomicU64,
     bind_data: &ReadGeoBindData,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
@@ -161,55 +159,24 @@ where
         &ReadGeoBindData,
     ) -> Result<(), Box<dyn std::error::Error>>,
 {
-    let rank = bind_data.shape.len();
+    let rank = bind_data.metadata.shape.len();
     let mut valid_rows = 0;
 
     loop {
         if local_state.current_chunk_buffer.is_none() {
-            let assigned_grid = if let Some(idx) = local_state.grid_batch.pop() {
-                Some(idx)
-            } else {
-                let mut g_state = global_state
-                    .lock()
-                    .map_err(|e| format!("Mutex poisoned: {}", e))?;
+            let chunk_idx = next_chunk.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-                let mut next_batch = g_state.grid_iterator.next_batch(16);
-                if next_batch.is_empty() {
-                    None
-                } else {
-                    next_batch.reverse();
-                    let idx = next_batch.pop().unwrap();
-                    local_state.grid_batch = next_batch;
-                    Some(idx)
-                }
-            };
+            let chunk_res = bind_data
+                .stream
+                .read_chunk(chunk_idx)
+                .map_err(|e| format!("stream read error: {}", e))?;
 
-            let assigned_grid = match assigned_grid {
-                Some(grid) => grid,
+            let (buffer_raw, subset_info) = match chunk_res {
+                Some(res) => res,
                 None => break,
             };
-            local_state.assigned_grid = assigned_grid.clone();
 
-            let chunk_reader = geozarr_core::scanner::ChunkReader::new(
-                bind_data.array.clone(),
-                bind_data.is_remote,
-                bind_data.shape.clone(),
-                bind_data.chunk_shape.clone(),
-            );
-
-            let (elements, subset_info) = chunk_reader
-                .read_chunk_subset::<T>(
-                    &assigned_grid,
-                    &bind_data.bounds_min,
-                    &bind_data.bounds_max,
-                )
-                .map_err(|e| format!("zarrs read error: {}", e))?;
-
-            if elements.is_empty() {
-                continue;
-            }
-
-            local_state.current_chunk_buffer = Some(wrap(elements));
+            local_state.current_chunk_buffer = Some(buffer_raw);
             local_state.subset_info = Some(subset_info);
             local_state.element_cursor = 0;
         }
@@ -223,8 +190,12 @@ where
 
         for dim in 0..rank {
             if local_state.projected_columns.contains(&dim) {
-                if let Some(coord_vals) = bind_data.coords.get(&bind_data.dim_names[dim]) {
-                    let is_0_360 = bind_data.lon_0_360_dims.contains(&dim);
+                if let Some(coord_vals) = bind_data
+                    .metadata
+                    .coords
+                    .get(&bind_data.metadata.dim_names[dim])
+                {
+                    let is_0_360 = bind_data.metadata.lon_0_360_dims.contains(&dim);
                     let mut coord_vector = output.flat_vector(dim);
                     let coord_slice = coord_vector.as_mut_slice::<f64>();
                     populate_coordinate_batch_f64(
@@ -237,7 +208,7 @@ where
                         None,
                         &mut coord_slice[valid_rows..valid_rows + batch_size],
                     );
-                } else if let Some(ref transform) = bind_data.spatial_transform {
+                } else if let Some(ref transform) = bind_data.metadata.spatial_transform {
                     if dim < transform.scale.len() {
                         let mut coord_vector = output.flat_vector(dim);
                         let coord_slice = coord_vector.as_mut_slice::<f64>();
@@ -309,22 +280,21 @@ where
 
 #[macro_export]
 macro_rules! dispatch_write_chunk {
-    (String, $enum_variant:path, $output:expr, $local_state:expr, $global_state:expr, $bind_data:expr) => {{
+    (String, $enum_variant:path, $output:expr, $local_state:expr, $next_chunk:expr, $bind_data:expr) => {{
         use duckdb::core::Inserter;
         $crate::vector_writer::write_chunk_unified::<String, _, _>(
             |buf| match buf {
                 $enum_variant(v) => Ok(v),
                 _ => Err("Chunk buffer type mismatch".into()),
             },
-            |v| $enum_variant(v),
             |output, valid_rows, batch_size, cursor, buffer, bind_data| {
-                let rank = bind_data.shape.len();
+                let rank = bind_data.metadata.shape.len();
                 let mut value_vector = output.flat_vector(rank);
                 for i in 0..batch_size {
                     let val = buffer
                         .get(cursor + i)
                         .ok_or("Malformed Zarr chunk: unexpected buffer size")?;
-                    if Some(val.as_bytes()) == bind_data.fill_value_bytes.as_deref() {
+                    if Some(val.as_bytes()) == bind_data.metadata.fill_value_bytes.as_deref() {
                         value_vector.set_null(valid_rows + i);
                     } else {
                         value_vector.insert(valid_rows + i, val.as_str());
@@ -334,20 +304,23 @@ macro_rules! dispatch_write_chunk {
             },
             $output,
             $local_state,
-            $global_state,
+            $next_chunk,
             $bind_data,
         )
     }};
-    ($rust_type:ty, $enum_variant:path, $output:expr, $local_state:expr, $global_state:expr, $bind_data:expr) => {{
+    ($rust_type:ty, $enum_variant:path, $output:expr, $local_state:expr, $next_chunk:expr, $bind_data:expr) => {{
         $crate::vector_writer::write_chunk_unified::<$rust_type, _, _>(
             |buf| match buf {
                 $enum_variant(v) => Ok(v),
                 _ => Err("Chunk buffer type mismatch".into()),
             },
-            |v| $enum_variant(v),
             |output, valid_rows, batch_size, cursor, buffer, bind_data| {
-                let rank = bind_data.shape.len();
-                let fill_bytes_slice = bind_data.fill_value_bytes.as_deref().unwrap_or_default();
+                let rank = bind_data.metadata.shape.len();
+                let fill_bytes_slice = bind_data
+                    .metadata
+                    .fill_value_bytes
+                    .as_deref()
+                    .unwrap_or_default();
                 let mut value_vector = output.flat_vector(rank);
                 let value_slice = value_vector.as_mut_slice::<$rust_type>();
                 for i in 0..batch_size {
@@ -366,7 +339,7 @@ macro_rules! dispatch_write_chunk {
             },
             $output,
             $local_state,
-            $global_state,
+            $next_chunk,
             $bind_data,
         )
     }};

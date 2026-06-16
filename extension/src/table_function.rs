@@ -25,35 +25,15 @@ fn zarr_to_duckdb_logical_type(data_type: &DataType) -> std::result::Result<Logi
 }
 
 pub struct ReadGeoBindData {
-    pub path: String,
-    pub shape: Vec<u64>,
-    pub chunk_shape: Vec<u64>,
-    pub data_type: DataType,
-    pub dim_names: Vec<String>,
-    pub coords: HashMap<String, Vec<f64>>,
-    /// Indices of coordinate dimensions that use 0-360 longitude convention.
-    /// Values are stored as 0-360 internally; output is normalized to -180-180.
-    pub lon_0_360_dims: std::collections::HashSet<usize>,
+    pub stream: std::sync::Arc<dyn geozarr_core::geo_dataset::ChunkStream>,
+    pub metadata: geozarr_core::geo_dataset::DatasetMetadata,
     pub bounds_min: Vec<u64>,
     pub bounds_max: Vec<u64>,
-    pub fill_value_bytes: Option<Vec<u8>>,
-    pub array: std::sync::Arc<zarrs::array::Array<dyn zarrs::storage::ReadableStorageTraits>>,
-    pub spatial_transform: Option<geozarr_core::metadata::SpatialTransform>,
-    /// True when the store is remote (HTTP/S3). For remote stores we read full
-    /// chunks in one request rather than using the Blosc partial decoder, which
-    /// would otherwise issue thousands of byte-range requests and saturate the
-    /// connection pool.
-    pub is_remote: bool,
 }
 
 use geozarr_core::types::ChunkBuffer;
 
-pub struct GlobalState {
-    pub grid_iterator: geozarr_core::scanner::GridIterator,
-}
-
 pub struct LocalState {
-    pub assigned_grid: Vec<u64>,
     pub current_chunk_buffer: Option<ChunkBuffer>,
     pub projected_columns: Vec<usize>,
     /// Cursor into `current_chunk_buffer` (which holds only the valid subset elements).
@@ -65,7 +45,7 @@ pub struct LocalState {
 }
 
 pub struct ReadGeoInitData {
-    pub global_state: Mutex<GlobalState>,
+    pub next_chunk: std::sync::atomic::AtomicU64,
     pub local_states: Mutex<HashMap<std::thread::ThreadId, LocalState>>,
     pub projected_columns: Vec<usize>,
 }
@@ -157,68 +137,39 @@ impl VTab for ReadGeoVTab {
         }
 
         let asset = bind.get_named_parameter("asset").map(|v| v.to_string());
-        let dataset = geozarr_core::dataset::ZarrDataset::open_with_asset(
-            &path,
-            asset.as_deref(),
-            Some(&constraints),
-        )?;
+        let dataset =
+            geozarr_core::dataset::open_dataset(&path, asset.as_deref(), Some(&constraints))?;
 
         let schema = dataset
             .schema()
-            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            .map_err(|e| -> Box<dyn std::error::Error> { e })?;
         for (name, data_type) in schema {
             let type_id = zarr_to_duckdb_logical_type(&data_type)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
             bind.add_result_column(&name, type_id.into());
         }
 
+        let metadata = dataset.metadata();
         let (bounds_min, bounds_max) = dataset.compute_bounds(&constraints);
+        let stream = dataset.scan(&constraints)?;
 
         Ok(ReadGeoBindData {
-            path,
-            shape: dataset.shape,
-            chunk_shape: dataset.chunk_shape,
-            data_type: dataset.data_type,
-            dim_names: dataset.dim_names,
-            coords: dataset.coords,
-            lon_0_360_dims: dataset.lon_0_360_dims,
+            stream: stream.into(),
+            metadata,
             bounds_min,
             bounds_max,
-            fill_value_bytes: dataset.fill_value_bytes,
-            array: dataset.array,
-            spatial_transform: dataset.spatial_transform,
-            is_remote: dataset.is_remote,
         })
     }
 
     fn init(_init: &InitInfo) -> Result<Self::InitData, Box<dyn std::error::Error>> {
         let bind_data = unsafe { &*_init.get_bind_data::<ReadGeoBindData>() };
 
-        let rank = bind_data.shape.len();
-        let mut chunk_bounds_min = vec![0; rank];
-        let mut chunk_bounds_max = vec![0; rank];
-        for i in 0..rank {
-            chunk_bounds_min[i] = bind_data.bounds_min[i] / bind_data.chunk_shape[i];
-            chunk_bounds_max[i] = bind_data.bounds_max[i] / bind_data.chunk_shape[i];
+        if let Some(chunks) = bind_data.stream.estimated_chunks() {
+            _init.set_max_threads(chunks);
         }
 
-        // Tell DuckDB how many threads can process this scan in parallel — one per chunk.
-        let num_chunks: u64 = (0..rank)
-            .map(|i| chunk_bounds_max[i].saturating_sub(chunk_bounds_min[i]) + 1)
-            .product();
-        _init.set_max_threads(num_chunks);
-
-        let _exhausted = bind_data.shape.contains(&0);
-
         Ok(ReadGeoInitData {
-            global_state: std::sync::Mutex::new(GlobalState {
-                grid_iterator: geozarr_core::scanner::GridIterator::new(
-                    &bind_data.bounds_min,
-                    &bind_data.bounds_max,
-                    &bind_data.shape,
-                    &bind_data.chunk_shape,
-                ),
-            }),
+            next_chunk: std::sync::atomic::AtomicU64::new(0),
             local_states: std::sync::Mutex::new(HashMap::new()),
             projected_columns: _init
                 .get_column_indices()
@@ -246,7 +197,6 @@ impl VTab for ReadGeoVTab {
                 state
             } else {
                 LocalState {
-                    assigned_grid: vec![],
                     current_chunk_buffer: None,
                     projected_columns: init_data.projected_columns.clone(),
                     element_cursor: 0,
@@ -259,11 +209,11 @@ impl VTab for ReadGeoVTab {
 
         // Dispatch based on data type
         geozarr_core::dispatch_zarr_type!(
-            bind_data.data_type,
+            bind_data.metadata.data_type,
             dispatch_write_chunk,
             output,
             &mut local_state,
-            &init_data.global_state,
+            &init_data.next_chunk,
             bind_data
         )?;
 
@@ -306,20 +256,21 @@ impl VTab for PlanReadGeoVTab {
         // Reuse ReadGeoVTab logic to compute bounds
         let read_bind = ReadGeoVTab::bind(bind)?;
 
-        let rank = read_bind.shape.len();
+        let rank = read_bind.metadata.shape.len();
         let mut total_chunks = 1u64;
         let mut chunk_volume = 1u64;
 
         for i in 0..rank {
-            let min_chunk = read_bind.bounds_min[i] / read_bind.chunk_shape[i];
-            let max_chunk = read_bind.bounds_max[i] / read_bind.chunk_shape[i];
+            let min_chunk = read_bind.bounds_min[i] / read_bind.metadata.chunk_shape[i];
+            let max_chunk = read_bind.bounds_max[i] / read_bind.metadata.chunk_shape[i];
 
             let num_chunks = max_chunk.saturating_sub(min_chunk).saturating_add(1);
             total_chunks = total_chunks.saturating_mul(num_chunks);
-            chunk_volume = chunk_volume.saturating_mul(read_bind.chunk_shape[i]);
+            chunk_volume = chunk_volume.saturating_mul(read_bind.metadata.chunk_shape[i]);
         }
 
-        let bytes_per_element = geozarr_core::types::bytes_per_element(&read_bind.data_type);
+        let bytes_per_element =
+            geozarr_core::types::bytes_per_element(&read_bind.metadata.data_type);
 
         let total_bytes = total_chunks
             .saturating_mul(chunk_volume)
@@ -385,16 +336,7 @@ mod tests {
 
     #[test]
     fn test_iteration_state_initialization() {
-        let _global_state = GlobalState {
-            grid_iterator: geozarr_core::scanner::GridIterator::new(
-                &[0, 0, 0],
-                &[10, 10, 10],
-                &[10, 10, 10],
-                &[5, 5, 5],
-            ),
-        };
         let local_state = LocalState {
-            assigned_grid: vec![0, 0, 0],
             element_cursor: 0,
             current_chunk_buffer: None,
             projected_columns: vec![0, 1, 2],
