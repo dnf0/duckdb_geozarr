@@ -60,6 +60,8 @@ pub struct LocalState {
     pub element_cursor: usize,
     /// Subset info for coordinate reconstruction.
     pub subset_info: Option<geozarr_core::scanner::SubsetInfo>,
+    pub grid_batch: Vec<Vec<u64>>,
+    pub buffer_pool: Option<Vec<u8>>,
 }
 
 pub struct ReadGeoInitData {
@@ -249,6 +251,8 @@ impl VTab for ReadGeoVTab {
                     projected_columns: init_data.projected_columns.clone(),
                     element_cursor: 0,
                     subset_info: None,
+                    grid_batch: Vec::new(),
+                    buffer_pool: None,
                 }
             }
         };
@@ -395,6 +399,8 @@ mod tests {
             current_chunk_buffer: None,
             projected_columns: vec![0, 1, 2],
             subset_info: None,
+            grid_batch: Vec::new(),
+            buffer_pool: None,
         };
         assert_eq!(local_state.element_cursor, 0);
     }

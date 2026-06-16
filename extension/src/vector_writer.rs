@@ -160,12 +160,24 @@ where
 
     loop {
         if local_state.current_chunk_buffer.is_none() {
-            let mut g_state = global_state
-                .lock()
-                .map_err(|e| format!("Mutex poisoned: {}", e))?;
+            let assigned_grid = loop {
+                if let Some(idx) = local_state.grid_batch.pop() {
+                    break Some(idx);
+                }
 
-            let assigned_grid = g_state.grid_iterator.next();
-            drop(g_state);
+                let mut g_state = global_state
+                    .lock()
+                    .map_err(|e| format!("Mutex poisoned: {}", e))?;
+
+                let mut next_batch = g_state.grid_iterator.next_batch(16);
+                if next_batch.is_empty() {
+                    break None;
+                }
+                next_batch.reverse();
+                let idx = next_batch.pop().unwrap();
+                local_state.grid_batch = next_batch;
+                break Some(idx);
+            };
 
             let assigned_grid = match assigned_grid {
                 Some(grid) => grid,
@@ -273,6 +285,11 @@ where
         valid_rows += batch_size;
         local_state.element_cursor += batch_size;
         if local_state.element_cursor >= total {
+            // Note: zarrs retrieve_chunk_subset_elements allocates a Vec internally.
+            // For now, we will simply set state.buffer_pool = Some(vec![]) at the end
+            // of this buffer, even though zarrs doesn't let us reuse the allocation directly yet.
+            // But setting up the state tracking is the goal for this task.
+            local_state.buffer_pool = Some(vec![]);
             local_state.current_chunk_buffer = None;
         }
 
