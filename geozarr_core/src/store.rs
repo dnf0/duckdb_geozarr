@@ -111,7 +111,12 @@ impl ReadableStorageTraits for AsyncToSyncOpendalStore {
                     Ok(Ok((idx, buf))) => out[idx] = buf,
                     Ok(Err(None)) => return Ok(None),
                     Ok(Err(Some(e))) => return Err(e),
-                    Err(e) => return Err(zarrs::storage::StorageError::Other(format!("Join error: {}", e))),
+                    Err(e) => {
+                        return Err(zarrs::storage::StorageError::Other(format!(
+                            "Join error: {}",
+                            e
+                        )))
+                    }
                 }
             }
             Ok(Some(out))
@@ -210,9 +215,11 @@ fn build_local_cog_child(
     let header_len = std::fs::metadata(&canonical_path)
         .map(|m| m.len().min(COG_HEADER_WINDOW))
         .unwrap_or(COG_HEADER_WINDOW);
-    let header_bytes = crate::store::safe_block_on(async { operator.read_with(&fname).range(0..header_len).await })
-        .map(|b| b.to_vec())
-        .map_err(|e| e.to_string())?;
+    let header_bytes = crate::store::safe_block_on(async {
+        operator.read_with(&fname).range(0..header_len).await
+    })
+    .map(|b| b.to_vec())
+    .map_err(|e| e.to_string())?;
     let meta = crate::cog::parse_cog_metadata(&header_bytes)?;
     crate::virtual_store::VirtualCogStore::new(operator, fname, meta)
 }
@@ -375,8 +382,9 @@ pub fn resolve_sync_store(
         let store: Arc<dyn ReadableStorageTraits> = if is_cog {
             let async_op_clone = async_operator.clone();
             let root_str = root.to_string();
-            let header_res = safe_block_on(async { async_op_clone.read_with(&root_str).range(0..16384).await })
-                .map_err(|e| e.to_string());
+            let header_res =
+                safe_block_on(async { async_op_clone.read_with(&root_str).range(0..16384).await })
+                    .map_err(|e| e.to_string());
 
             let header_bytes = header_res?.to_vec();
             let meta = crate::cog::parse_cog_metadata(&header_bytes).unwrap_or_default();
@@ -572,8 +580,11 @@ pub fn resolve_sync_store(
                                 Ok::<_, String>((name, idx, store))
                             });
                         }
-                        let mut results: Vec<(String, usize, crate::virtual_store::VirtualCogStore)> =
-                            Vec::new();
+                        let mut results: Vec<(
+                            String,
+                            usize,
+                            crate::virtual_store::VirtualCogStore,
+                        )> = Vec::new();
                         while let Some(res) = set.join_next().await {
                             if let Ok(item) = res {
                                 let (name, idx, store) = item?;
@@ -814,12 +825,12 @@ pub fn resolve_sync_store(
             let async_op_clone = async_operator.clone();
             let root_str_clone = root_str.clone();
             let header_res = safe_block_on(async {
-                    async_op_clone
-                        .read_with(&root_str_clone)
-                        .range(0..16384)
-                        .await
-                })
-                .map_err(|e| e.to_string());
+                async_op_clone
+                    .read_with(&root_str_clone)
+                    .range(0..16384)
+                    .await
+            })
+            .map_err(|e| e.to_string());
 
             let header_bytes = header_res?.to_vec();
             let meta = crate::cog::parse_cog_metadata(&header_bytes).unwrap_or_default();
@@ -967,12 +978,12 @@ pub fn resolve_sync_store(
                 .map(|m| m.len().min(COG_HEADER_WINDOW))
                 .unwrap_or(COG_HEADER_WINDOW);
             let header_res = safe_block_on(async {
-                    async_op_clone
-                        .read_with(&fname_clone)
-                        .range(0..header_len)
-                        .await
-                })
-                .map_err(|e| e.to_string());
+                async_op_clone
+                    .read_with(&fname_clone)
+                    .range(0..header_len)
+                    .await
+            })
+            .map_err(|e| e.to_string());
 
             let header_bytes = header_res?.to_vec();
             let meta = crate::cog::parse_cog_metadata(&header_bytes).unwrap_or_default();
@@ -1203,5 +1214,4 @@ mod tests {
         assert_eq!(partial[0].as_ref(), &[2]);
         assert_eq!(partial[1].as_ref(), &[1, 2]);
     }
-
 }

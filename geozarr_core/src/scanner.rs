@@ -7,27 +7,63 @@ pub struct GridIterator {
     current: Option<Vec<u64>>,
     bounds_min: Vec<u64>,
     bounds_max: Vec<u64>,
+    remaining: usize,
+    exact_size: bool,
 }
 
 impl GridIterator {
-    pub fn new(
-        bounds_min: &[u64],
-        bounds_max: &[u64],
-        _shape: &[u64],
-        chunk_shape: &[u64],
-    ) -> Self {
-        let rank = bounds_min.len();
-        let mut min = vec![0u64; rank];
-        let mut max = vec![0u64; rank];
-        for i in 0..rank {
-            min[i] = bounds_min[i] / chunk_shape[i];
-            max[i] = bounds_max[i] / chunk_shape[i];
+    pub fn new(bounds_min: &[u64], bounds_max: &[u64], shape: &[u64], chunk_shape: &[u64]) -> Self {
+        assert_eq!(bounds_min.len(), bounds_max.len());
+        assert_eq!(bounds_min.len(), shape.len());
+        assert_eq!(bounds_min.len(), chunk_shape.len());
+
+        let mut min = Vec::with_capacity(bounds_min.len());
+        let mut max = Vec::with_capacity(bounds_max.len());
+        let mut remaining: usize = 1;
+        let mut exact_size = true;
+        let mut empty = false;
+
+        for i in 0..bounds_min.len() {
+            let chunk_min = bounds_min[i] / chunk_shape[i];
+            let chunk_max = bounds_max[i] / chunk_shape[i];
+            min.push(chunk_min);
+            max.push(chunk_max);
+
+            if chunk_max < chunk_min {
+                empty = true;
+            } else {
+                let dim_count = chunk_max.saturating_sub(chunk_min).saturating_add(1);
+
+                if let Ok(dim_count_usize) = usize::try_from(dim_count) {
+                    if let Some(r) = remaining.checked_mul(dim_count_usize) {
+                        remaining = r;
+                    } else {
+                        exact_size = false;
+                        remaining = usize::MAX;
+                    }
+                } else {
+                    exact_size = false;
+                    remaining = usize::MAX;
+                }
+            }
         }
+
+        if empty {
+            remaining = 0;
+            exact_size = true;
+        }
+
         Self {
-            current: Some(min.clone()),
+            current: if empty { None } else { Some(min.clone()) },
+            remaining,
+            exact_size,
             bounds_min: min,
             bounds_max: max,
         }
+    }
+
+    pub fn next_batch(&mut self, batch_size: usize) -> Vec<Vec<u64>> {
+        self.by_ref().take(batch_size).collect()
     }
 }
 
@@ -36,6 +72,7 @@ impl Iterator for GridIterator {
 
     fn next(&mut self) -> Option<Self::Item> {
         let current = self.current.take()?;
+        self.remaining = self.remaining.saturating_sub(1);
         let mut next_grid = current.clone();
 
         let rank = next_grid.len();
@@ -55,6 +92,16 @@ impl Iterator for GridIterator {
         }
 
         Some(current)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.exact_size {
+            (self.remaining, Some(self.remaining))
+        } else {
+            // Lower bound is useless since remaining was capped, just say 0 or whatever.
+            // Upper bound must be None since we overflowed usize.
+            (0, None)
+        }
     }
 }
 
@@ -143,6 +190,28 @@ mod tests {
     use zarrs::array::chunk_grid::{ChunkGrid, RegularChunkGrid};
     use zarrs::array::{ArrayBuilder, DataType, FillValue};
     use zarrs::storage::store::MemoryStore;
+
+    #[test]
+    fn test_grid_iterator_batch() {
+        let bounds_min = vec![0, 0];
+        let bounds_max = vec![19, 19];
+        let shape = vec![20, 20];
+        let chunk_shape = vec![5, 5];
+        let mut iter = GridIterator::new(&bounds_min, &bounds_max, &shape, &chunk_shape);
+
+        let batch1 = iter.next_batch(3);
+        assert_eq!(batch1.len(), 3);
+        assert_eq!(batch1[0], vec![0, 0]);
+        assert_eq!(batch1[1], vec![0, 1]);
+        assert_eq!(batch1[2], vec![0, 2]);
+
+        let batch2 = iter.next_batch(100); // More than remaining
+        assert_eq!(batch2.len(), 13);
+        assert_eq!(batch2.last().unwrap(), &vec![3, 3]);
+
+        let batch3 = iter.next_batch(3);
+        assert!(batch3.is_empty());
+    }
 
     #[test]
     fn test_read_chunk_subset() {
