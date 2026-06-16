@@ -33,7 +33,7 @@ impl GridIterator {
                 empty = true;
             } else {
                 let dim_count = chunk_max.saturating_sub(chunk_min).saturating_add(1);
-                
+
                 if let Ok(dim_count_usize) = usize::try_from(dim_count) {
                     if let Some(r) = remaining.checked_mul(dim_count_usize) {
                         remaining = r;
@@ -198,7 +198,7 @@ mod tests {
         let shape = vec![20, 20];
         let chunk_shape = vec![5, 5];
         let mut iter = GridIterator::new(&bounds_min, &bounds_max, &shape, &chunk_shape);
-        
+
         let batch1 = iter.next_batch(3);
         assert_eq!(batch1.len(), 3);
         assert_eq!(batch1[0], vec![0, 0]);
