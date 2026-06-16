@@ -88,6 +88,8 @@ SELECT * FROM read_geo('itemcollection.json', asset := 'red',
                        time_min := 1767225600, time_max := 1769904000);
 ```
 
+For remote STAC Search APIs, DuckDB's spatial (`lat_min`/`lon_max`) and temporal (`time_min`/`time_max`) bounding filters are aggressively pushed down to the server by translating them into STAC `bbox` and `datetime` query parameters. This ensures Eider only downloads metadata and data for STAC Items that actually intersect your query.
+
 The collection must be **grid-uniform** — every Item and asset must share the
 same shape, affine, and CRS, and each asset's data type must be uniform across
 Items. If anything differs, `read_geo` errors naming the offending Item rather
