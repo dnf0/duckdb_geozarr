@@ -499,7 +499,10 @@ impl crate::geo_dataset::ChunkStream for ZarrChunkStream {
     fn read_chunk(
         &self,
         chunk_idx: u64,
-    ) -> Result<Option<(crate::types::ChunkBuffer, crate::scanner::SubsetInfo)>, Box<dyn std::error::Error>> {
+    ) -> Result<
+        Option<(crate::types::ChunkBuffer, crate::scanner::SubsetInfo)>,
+        Box<dyn std::error::Error>,
+    > {
         if chunk_idx >= self.num_chunks {
             return Ok(None);
         }
@@ -514,8 +517,11 @@ impl crate::geo_dataset::ChunkStream for ZarrChunkStream {
 
         macro_rules! retrieve_and_store {
             ($ty:ty, $variant:path $(,)*) => {{
-                let (elements, subset_info) = reader
-                    .read_chunk_subset::<$ty>(&grid_pos, &self.bounds_min, &self.bounds_max)?;
+                let (elements, subset_info) = reader.read_chunk_subset::<$ty>(
+                    &grid_pos,
+                    &self.bounds_min,
+                    &self.bounds_max,
+                )?;
                 Ok(Some(($variant(elements), subset_info)))
             }};
         }
@@ -542,13 +548,16 @@ impl crate::geo_dataset::GeoDataset for Arc<ZarrDataset> {
         }
     }
 
-    fn compute_bounds(&self, constraints: &crate::query_planner::QueryConstraints) -> (Vec<u64>, Vec<u64>) {
+    fn compute_bounds(
+        &self,
+        constraints: &crate::query_planner::QueryConstraints,
+    ) -> (Vec<u64>, Vec<u64>) {
         self.as_ref().compute_bounds(constraints)
     }
 
     fn scan(
         &self,
-        constraints: &crate::query_planner::QueryConstraints
+        constraints: &crate::query_planner::QueryConstraints,
     ) -> Result<Box<dyn crate::geo_dataset::ChunkStream>, Box<dyn std::error::Error>> {
         let (bounds_min, bounds_max) = self.compute_bounds(constraints);
 
@@ -582,9 +591,9 @@ impl crate::geo_dataset::GeoDataset for Arc<ZarrDataset> {
 }
 
 pub fn open_dataset(
-    path: &str, 
+    path: &str,
     asset: Option<&str>,
-    constraints: Option<&crate::query_planner::QueryConstraints>
+    constraints: Option<&crate::query_planner::QueryConstraints>,
 ) -> Result<Box<dyn crate::geo_dataset::GeoDataset>, Box<dyn std::error::Error>> {
     let zarr = ZarrDataset::open_with_asset(path, asset, constraints)?;
     Ok(Box::new(Arc::new(zarr)))

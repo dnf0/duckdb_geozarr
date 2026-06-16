@@ -26,7 +26,7 @@ Add a test for `GridIterator` batching in `geozarr_core/src/scanner.rs`:
         let shape = vec![20, 20];
         let chunk_shape = vec![5, 5];
         let mut iter = GridIterator::new(&bounds_min, &bounds_max, &shape, &chunk_shape);
-        
+
         let batch1 = iter.next_batch(3);
         assert_eq!(batch1.len(), 3);
         assert_eq!(batch1[0], vec![0, 0]);
@@ -162,11 +162,11 @@ With:
                 let mut g_state = global_state
                     .lock()
                     .map_err(|e| format!("Mutex poisoned: {}", e))?;
-                
+
                 // Fetch a batch of 16 chunks
                 local_state.assigned_grids = g_state.grid_iterator.next_batch(16);
                 drop(g_state);
-                
+
                 // Reverse it so we can `pop` from the back efficiently
                 local_state.assigned_grids.reverse();
             }
@@ -196,7 +196,7 @@ Change it to:
 ```rust
         valid_rows += batch_size;
         local_state.element_cursor += batch_size;
-        
+
         if local_state.element_cursor >= total {
             // Memory pooling: reclaim the buffer instead of dropping it
             local_state.reusable_buffer = local_state.current_chunk_buffer.take();

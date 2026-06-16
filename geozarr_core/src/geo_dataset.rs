@@ -1,8 +1,8 @@
+use crate::metadata::SpatialTransform;
 use crate::query_planner::QueryConstraints;
 use crate::types::ChunkBuffer;
-use zarrs::array::DataType;
 use std::collections::{HashMap, HashSet};
-use crate::metadata::SpatialTransform;
+use zarrs::array::DataType;
 
 #[derive(Clone)]
 pub struct DatasetMetadata {
@@ -25,7 +25,7 @@ pub trait GeoDataset: Send + Sync {
 
     fn scan(
         &self,
-        constraints: &QueryConstraints
+        constraints: &QueryConstraints,
     ) -> Result<Box<dyn ChunkStream>, Box<dyn std::error::Error>>;
 }
 

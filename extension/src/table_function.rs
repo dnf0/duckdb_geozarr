@@ -135,15 +135,12 @@ impl VTab for ReadGeoVTab {
         }
 
         let asset = bind.get_named_parameter("asset").map(|v| v.to_string());
-        let dataset = geozarr_core::dataset::open_dataset(
-            &path,
-            asset.as_deref(),
-            Some(&constraints),
-        )?;
+        let dataset =
+            geozarr_core::dataset::open_dataset(&path, asset.as_deref(), Some(&constraints))?;
 
         let schema = dataset
             .schema()
-            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            .map_err(|e| -> Box<dyn std::error::Error> { e })?;
         for (name, data_type) in schema {
             let type_id = zarr_to_duckdb_logical_type(&data_type)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
@@ -268,7 +265,8 @@ impl VTab for PlanReadGeoVTab {
             chunk_volume = chunk_volume.saturating_mul(read_bind.metadata.chunk_shape[i]);
         }
 
-        let bytes_per_element = geozarr_core::types::bytes_per_element(&read_bind.metadata.data_type);
+        let bytes_per_element =
+            geozarr_core::types::bytes_per_element(&read_bind.metadata.data_type);
 
         let total_bytes = total_chunks
             .saturating_mul(chunk_volume)

@@ -16,7 +16,7 @@ This design addresses all three to improve overall query engine performance.
 
 ## 2. Improving Parallelism (Batch Iterator)
 **Problem:** DuckDB launches a thread pool for scanning. Each thread asks for the next chunk by locking a global `Mutex` wrapping the `GridIterator`. If chunks are small, threads spend more time contending for the lock than decoding data.
-**Solution:** Update `GridIterator` to yield a batch of chunk coordinates rather than a single coordinate. 
+**Solution:** Update `GridIterator` to yield a batch of chunk coordinates rather than a single coordinate.
 - A thread takes the lock, claims N chunks (e.g., 16), releases the lock instantly, and processes all 16 locally.
 **Trade-offs:** Might cause slight load imbalance at the very tail end of a scan if one thread gets a batch of 16 while others finish, but the drastic reduction in lock contention far outweighs this.
 

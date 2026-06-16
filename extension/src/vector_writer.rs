@@ -165,10 +165,12 @@ where
     loop {
         if local_state.current_chunk_buffer.is_none() {
             let chunk_idx = next_chunk.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            
-            let chunk_res = bind_data.stream.read_chunk(chunk_idx)
+
+            let chunk_res = bind_data
+                .stream
+                .read_chunk(chunk_idx)
                 .map_err(|e| format!("stream read error: {}", e))?;
-                
+
             let (buffer_raw, subset_info) = match chunk_res {
                 Some(res) => res,
                 None => break,
@@ -188,7 +190,11 @@ where
 
         for dim in 0..rank {
             if local_state.projected_columns.contains(&dim) {
-                if let Some(coord_vals) = bind_data.metadata.coords.get(&bind_data.metadata.dim_names[dim]) {
+                if let Some(coord_vals) = bind_data
+                    .metadata
+                    .coords
+                    .get(&bind_data.metadata.dim_names[dim])
+                {
                     let is_0_360 = bind_data.metadata.lon_0_360_dims.contains(&dim);
                     let mut coord_vector = output.flat_vector(dim);
                     let coord_slice = coord_vector.as_mut_slice::<f64>();
@@ -305,7 +311,11 @@ macro_rules! dispatch_write_chunk {
             },
             |output, valid_rows, batch_size, cursor, buffer, bind_data| {
                 let rank = bind_data.metadata.shape.len();
-                let fill_bytes_slice = bind_data.metadata.fill_value_bytes.as_deref().unwrap_or_default();
+                let fill_bytes_slice = bind_data
+                    .metadata
+                    .fill_value_bytes
+                    .as_deref()
+                    .unwrap_or_default();
                 let mut value_vector = output.flat_vector(rank);
                 let value_slice = value_vector.as_mut_slice::<$rust_type>();
                 for i in 0..batch_size {

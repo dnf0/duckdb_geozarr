@@ -1,9 +1,9 @@
 # Coordinate Vectorization Optimization — Design Spec
 
 ## Architecture & Approach
-We will optimize the loop inside `extension/src/vector_writer.rs` where we generate `lat`/`lon` values for DuckDB. Currently, it uses branchless modulo arithmetic (`pos % stride`) to determine which coordinate value applies to which row in the batch. 
+We will optimize the loop inside `extension/src/vector_writer.rs` where we generate `lat`/`lon` values for DuckDB. Currently, it uses branchless modulo arithmetic (`pos % stride`) to determine which coordinate value applies to which row in the batch.
 
-However, modulo (`%`) and integer division (`/`) are notorious for defeating LLVM's auto-vectorization (SIMD) passes because they are expensive hardware instructions. 
+However, modulo (`%`) and integer division (`/`) are notorious for defeating LLVM's auto-vectorization (SIMD) passes because they are expensive hardware instructions.
 
 Our strategy is to **strength-reduce** the loop:
 1. We will split the processing into two phases: first, we'll calculate how many elements share the same coordinate value (`stride` elements), and then we'll use a fast inner loop to fill the output slice with that constant value.
