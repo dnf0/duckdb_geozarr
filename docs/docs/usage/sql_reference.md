@@ -56,5 +56,4 @@ A Zarr `fill_value` is surfaced as SQL `NULL`.
 
 The URI argument accepts local paths and remote `s3://` and `http(s)://`
 locations (configured via OpenDAL environment variables — see
-[Installation](./installation.md)). `read_geo` reads Zarr arrays directly; COG
-and STAC sources are experimental and not yet fully supported in this release.
+[Installation](./installation.md)). `read_geo` reads Zarr arrays, Cloud Optimized GeoTIFFs (COGs), and STAC Items and ItemCollections natively.

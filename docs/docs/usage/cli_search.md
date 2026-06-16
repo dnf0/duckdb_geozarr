@@ -29,8 +29,7 @@ dataset selector. In `--output=json` mode it requires `--api` and `--collection`
 and prints the matching STAC feature URIs as `{"status":"success","uris":[…]}`.
 
 > **Note:** `search` currently emits each matching STAC feature's self link.
-> Reading STAC items directly via `read_geo` is experimental (see the
-> [SQL Reference](./sql_reference.md#source-uris)).
+> These STAC item URLs can be passed directly to `read_geo` as native sources.
 
 ## Examples
 
