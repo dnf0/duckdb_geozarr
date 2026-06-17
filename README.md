@@ -20,9 +20,10 @@ Generating a block of 2,048 projected coordinates natively inside the extension 
 
 Geospatial and climate data are frequently stored in Zarr format because it enables efficient, chunked, and compressed storage of multi-dimensional arrays (like Time × Latitude × Longitude). However, querying this data traditionally required loading it into Python (via `xarray` or `zarr-python`) before performing analytics, introducing massive IPC (Inter-Process Communication) and memory overhead.
 
-This project bridges the gap with two tools:
+This project bridges the gap with three tools:
 1. **The DuckDB Extension:** Natively streams remote Zarr chunks directly into DuckDB's vectorized execution engine for lightning-fast reads.
 2. **`eider` CLI:** A companion CLI tool that serves as an agentic spatial data engine for GeoZarr and DuckDB. It allows users to discover dataset metadata (`eider info`) and extract Zarr data intersecting with vector polygons (`eider extract`).
+3. **`eider-mcp` Server:** A Model Context Protocol (MCP) stdio server that exposes Eider's geospatial reads safely to AI agents with curated tools for spatial queries, zonal statistics, and timeseries extraction.
 
 ### Key Features
 - **Zero-Copy Streaming**: Chunks are loaded, decompressed, and decoded natively inside DuckDB's engine.
@@ -84,6 +85,32 @@ eider resample analysis.duckdb monthly.duckdb --freq month --agg avg
 eider shell monthly.duckdb
 ```
 
+## Eider MCP Server
+
+`eider-mcp` is a standard [Model Context Protocol](https://modelcontextprotocol.io/) stdio server designed to give AI agents safe, autonomous access to geospatial data.
+
+Rather than giving an LLM a raw SQL prompt, `eider-mcp` provides curated, stateful tools:
+- `describe_dataset`: Inspect array shape, dtype, and CRS.
+- `estimate_cost`: Preview the chunk and byte cost before committing to a read.
+- `read_region`: Pull an exact spatial/temporal slice into a session table.
+- `extract_point_timeseries`: Extract the value history at specific locations.
+- `zonal_stats`: Calculate zonal statistics (centroid, all-touched, area-weighted) over vector polygons.
+- `run_sql`: A guarded, read-only escape hatch for custom aggregations over session handles.
+
+```json
+{
+  "mcpServers": {
+    "eider": {
+      "command": "/absolute/path/to/target/debug/eider-mcp",
+      "env": {
+        "EIDER_EXTENSION_PATH": "/absolute/path/to/eider.duckdb_extension",
+        "GEOZARR_ALLOW_PATH": "/data/zarr"
+      }
+    }
+  }
+}
+```
+
 ## Development
 
 ## Architecture & Execution Strategy
@@ -91,6 +118,7 @@ The project is structured as a Cargo workspace:
 - `geozarr_core/`: The deep, pure Rust domain model handling Zarr metadata, coordinate projection, bounds validation, and types. Free from sink-specific (e.g., DuckDB) or UI dependencies.
 - `extension/`: The core DuckDB loadable extension, acting as a thin C-API adapter over `geozarr_core`.
 - `cli/`: The companion `eider` extraction and analysis tool, acting as a command router.
+- `mcp_server/`: The `eider-mcp` server providing an AI-friendly interface via the Model Context Protocol.
 
 To build the project:
 ```bash
