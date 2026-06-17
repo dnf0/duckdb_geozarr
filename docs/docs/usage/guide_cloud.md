@@ -13,10 +13,10 @@ work from both the SQL extension and the CLI.
 
 ## Configure access
 
-Set standard environment variables before querying:
+Eider's CLI and extension support hierarchical configuration. Credentials and settings can be loaded from standard environment variables, or automatically from your `eider.toml` config file or AWS config files.
 
 ```bash
-# S3
+# Standard Environment Variables
 export AWS_ACCESS_KEY_ID=…
 export AWS_SECRET_ACCESS_KEY=…
 export AWS_REGION=us-east-1
@@ -24,6 +24,16 @@ export AWS_REGION=us-east-1
 # Allow local filesystem reads (when mixing local + remote)
 export GEOZARR_ALLOW_PATH=/
 ```
+
+### Hierarchical CLI Configuration and S3 Secret Injection
+
+The `eider` CLI automatically resolves S3 credentials via its configuration hierarchy:
+1. Explicit CLI arguments (highest priority)
+2. Environment variables (`AWS_ACCESS_KEY_ID`, etc.)
+3. `eider.toml` configuration files (current directory or `~/.config/eider/`)
+4. Native AWS credential resolution (e.g., `~/.aws/credentials`)
+
+When running DuckDB queries via the CLI's SQL capabilities, these resolved S3 credentials are automatically injected into the DuckDB session, so you don't need to manually configure `INSTALL httpfs; LOAD httpfs; SET s3_access_key_id='...';` inside your SQL scripts.
 
 ## Query remote data from SQL
 
