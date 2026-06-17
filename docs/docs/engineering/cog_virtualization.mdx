@@ -44,13 +44,13 @@ pipeline is identical to reading a real Zarr array.
 
 ## Supported & limitations
 
-**Supported:** single-band GeoTIFFs; uncompressed and Deflate-compressed tiles
+**Supported:** single-band and multi-band GeoTIFFs (up to 4 bands, parsed into an additional `band` dimension); uncompressed and Deflate-compressed tiles
 (predictor=1); the GeoTIFF affine (`ModelPixelScale`/`ModelTiepoint` or
 `ModelTransformation`) and CRS (`GeoKeyDirectory`). For a geographic CRS
 (EPSG:4326) the dimensions are `lat`/`lon`, so `lat_min`/`lon_max` bounding-box
-pushdown applies; the value column uses the COG's real data type.
+pushdown applies; the value column uses the COG's real data type. If the file is a JPEG2000 (`.jp2`), Eider can parse its structure with fallback heuristics.
 
-**Not yet supported:** Unsupported band counts (multi-band COGs), bit-depths,
+**Not yet supported:** Unsupported bit-depths,
 sample formats, and compression schemes (LZW/JPEG/WebP, horizontal-differencing
 predictors) return a clear error at open time rather than silently misreading
 the data. CRS reprojection is the one exception: projected COGs are read in
@@ -88,15 +88,14 @@ SELECT * FROM read_geo('itemcollection.json', asset := 'red',
                        time_min := 1767225600, time_max := 1769904000);
 ```
 
-For remote STAC Search APIs, DuckDB's spatial (`lat_min`/`lon_max`) and temporal (`time_min`/`time_max`) bounding filters are aggressively pushed down to the server by translating them into STAC `bbox` and `datetime` query parameters. This ensures Eider only downloads metadata and data for STAC Items that actually intersect your query.
+For remote STAC Search APIs, DuckDB's spatial (`lat_min`/`lon_max`) and temporal (`time_min`/`time_max`) bounding filters are aggressively pushed down to the server by translating them into STAC `bbox` and `datetime` query parameters. This ensures Eider only downloads metadata and data for STAC Items that actually intersect your query. The API response is fully paginated natively — Eider will eagerly traverse `rel:next` links to fetch the full matching collection.
 
 The collection must be **grid-uniform** — every Item and asset must share the
 same shape, affine, and CRS, and each asset's data type must be uniform across
 Items. If anything differs, `read_geo` errors naming the offending Item rather
 than silently misaligning slices (there is no regridding or reprojection).
 
-**Not yet supported:** STAC API **pagination** (a `rel:next` link is ignored —
-only the provided response is stacked); **multi-resolution** collections (assets
+**Not yet supported:** **multi-resolution** collections (assets
 with differing grids); Items without `properties.datetime`; stacking multiple
 assets into one array; and STAC Collection/Catalog traversal — these return a
 clear error.

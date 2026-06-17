@@ -22,6 +22,9 @@ of tools where the *correct* thing is the *easy* thing:
   inspect a dataset, estimate cost, read a window into a table, then keep
   querying that table by `table_handle` — building a multi-step analysis
   without re-reading the grid each time.
+- **Progress streaming.** Eider automatically streams live DuckDB query progress 
+  back to the MCP client through notifications, so agents and users can monitor
+  long-running zonal statistics or region extractions without polling.
 
 ## Running the server
 
@@ -128,6 +131,10 @@ Pick the convention deliberately — that, not the algorithm, is what makes a
 per-polygon result correct. See [Zonal statistics](../engineering/zonal_stats.mdx)
 for the full reasoning and benchmarks. **When to use:** to aggregate a grid per
 vector boundary (e.g. peak hazard per footprint).
+
+### `extract_point_timeseries(uri, points, value_col?="value")`
+
+Returns `{ table_handle, row_count, columns, rows, truncated }` containing timeseries extracted at specific geographic points. `points` is an array of `{lon, lat, id?}` objects. The tool pushes the points' bounding box down to the read, filters the cells exactly matching each point, and returns a time-stacked result. **When to use:** when the user wants to extract the value history at specific locations (e.g. tracking temperature at a list of weather stations).
 
 ### `list_tables()`
 
